@@ -4,6 +4,8 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <avr/io.h> 
+#include <avr/interrupt.h>
 #include "config.h"
 
 extern FILE _uart0io;

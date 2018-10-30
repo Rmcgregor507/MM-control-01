@@ -21,6 +21,7 @@
 // public variables:
 int8_t sys_state = 0;
 uint8_t sys_signals = 0;
+bool fsensor_triggered = false;
 uint8_t tmc2130_mode = NORMAL_MODE; // STEALTH_MODE;
 
 #if (UART_COM == 0)
@@ -209,8 +210,16 @@ void manual_extruder_selector()
 //! @copydoc manual_extruder_selector()
 void loop()
 {
+    UCSR1B = (1 << RXEN1) | (1 << TXEN1);   // Turn on the transmission and reception circuitry
+    UCSR1C = (1 << URSEL) | (1 << UCSZ0) | (1 << UCSZ1); // Use 8-bit character sizes
+
+    UBRRH = (BAUD_PRESCALE >> 8); // Load upper 8-bits of the baud rate value into the high byte of the UBRR register
+    UBRRL = BAUD_PRESCALE; // Load lower 8-bits of the baud rate value into the low byte of the UBRR register
+
+    UCSRB |= (1 << RXCIE);
+ 
     process_commands(uart_com);
-    
+    sei();
     if (!isPrinting) {
         manual_extruder_selector();
 #ifndef TESTING_STEALTH
@@ -222,6 +231,7 @@ void loop()
         }
     }
 #endif
+    cli();
 }
 
 extern "C" {
@@ -254,10 +264,8 @@ extern "C" {
             if (sscanf_P(line, PSTR("T%d"), &value) > 0) {
                 //T-code scanned
                 if ((value >= 0) && (value < EXTRUDERS)) {
-                    switch_extruder_withSensor(value);
-
-                    delay(200);
                     fprintf_P(inout, PSTR("ok\n"));
+                    switch_extruder_withSensor(value);
                 }
             } else if (sscanf_P(line, PSTR("L%d"), &value) > 0) {
                 // Load filament
@@ -266,8 +274,7 @@ extern "C" {
                     select_extruder(value);
                     delay(10);
                     feed_filament();
-
-                    delay(200);
+                    delay(100);
                     fprintf_P(inout, PSTR("ok\n"));
                 }
             } else if (sscanf_P(line, PSTR("M%d"), &value) > 0) {
@@ -313,12 +320,17 @@ extern "C" {
                     fprintf_P(inout, PSTR("ok\n"));
                 }
             } else if (sscanf_P(line, PSTR("C%d"), &value) > 0) {
-                if (value ==
-                        0) // C0 continue loading current filament (used after T-code), maybe add different code for
+                if (value == 0) // C0 continue loading current filament (used after T-code), maybe add different code for
                     // each extruder (the same way as T-codes) in the future?
                 {
                     load_filament_into_extruder();
                     fprintf_P(inout, PSTR("ok\n"));
+                }
+                if (value == 1) {  // used if finda doesn't see filament, attempt to cut and advise print to try again
+                    if (cutOffTip()) {
+                        load_filament_withSensor();
+                        fprintf_P(inout, PSTR("ok\n"));
+                    } fprintf_P(inout, PSTR("not_ok\n"));
                 }
             } else if (sscanf_P(line, PSTR("E%d"), &value) > 0) {
                 if ((value >= 0) && (value < EXTRUDERS)) { // Ex: eject filament
@@ -328,6 +340,13 @@ extern "C" {
             } else if (sscanf_P(line, PSTR("R%d"), &value) > 0) {
                 if (value == 0) { // R0: recover after eject filament
                     recover_after_eject();
+                    fprintf_P(inout, PSTR("ok\n"));
+                }
+            } else if (sscanf_P(line, PSTR("FS%d"), &value) > 0) {
+                if (value == 0) { // FS1: MK3 fsensor triggered
+                    fprintf_P(inout, PSTR("ok\n"));
+                } else if (value == 1) {
+                    fsensor_triggered = true;
                     fprintf_P(inout, PSTR("ok\n"));
                 }
             } else {
